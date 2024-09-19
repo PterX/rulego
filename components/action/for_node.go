@@ -36,6 +36,7 @@ import (
 	"github.com/expr-lang/expr/vm"
 	"github.com/rulego/rulego/api/types"
 	"github.com/rulego/rulego/components/base"
+	"github.com/rulego/rulego/utils/json"
 	"github.com/rulego/rulego/utils/maps"
 	"github.com/rulego/rulego/utils/str"
 	"strconv"
@@ -70,6 +71,8 @@ type ForNodeConfiguration struct {
 	//e.g., chain:rule01, where the item will start executing from the sub-chain rule01 until the chain completes,
 	//then returns to the starting point of the iteration.
 	Do string
+	// 是否合并每个遍历链执行结果，如果true,合并每个遍历结果交给下一个节点，否则不改变msg.Data
+	Sync bool
 }
 
 // ForNode iterates over msg or a specified field item value in msg to the next node.
@@ -124,6 +127,27 @@ func (x *ForNode) Init(_ types.Config, configuration types.Configuration) error 
 	return x.formDoVar()
 }
 
+func (x *ForNode) toMap(data string) interface{} {
+	var dataMap interface{}
+	if err := json.Unmarshal([]byte(data), &dataMap); err == nil {
+		return dataMap
+	} else {
+		return data
+	}
+}
+
+func (x *ForNode) toList(dataType types.DataType, itemDataList []string) []interface{} {
+	var resultData []interface{}
+	for _, itemData := range itemDataList {
+		if dataType == types.JSON {
+			resultData = append(resultData, x.toMap(itemData))
+		} else {
+			resultData = append(resultData, itemData)
+		}
+	}
+	return resultData
+}
+
 // OnMsg processes the message.
 func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	var err error
@@ -138,10 +162,14 @@ func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 		} else {
 			data = out
 		}
+	} else {
+		data = x.toMap(inData)
 	}
 	ctxWithCancel, cancelFunc := context.WithCancel(ctx.GetContext())
 	defer cancelFunc()
 
+	var resultData []interface{}
+	var itemDataList []string
 	switch v := data.(type) {
 	case []interface{}:
 		for index, item := range v {
@@ -149,8 +177,10 @@ func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			msg.Data = str.ToString(item)
 			msg.Metadata.PutValue(KeyLoopItem, msg.Data)
 			// 执行并，检查是否有取消请求
-			if err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
+			if itemDataList, err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
 				break
+			} else if x.Config.Sync {
+				resultData = append(resultData, x.toList(msg.DataType, itemDataList)...)
 			}
 		}
 	case []int:
@@ -158,8 +188,10 @@ func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			msg.Metadata.PutValue(KeyLoopIndex, strconv.Itoa(index))
 			msg.Metadata.PutValue(KeyLoopItem, str.ToString(item))
 			// 执行并，检查是否有取消请求
-			if err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
+			if itemDataList, err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
 				break
+			} else if x.Config.Sync {
+				resultData = append(resultData, x.toList(msg.DataType, itemDataList)...)
 			}
 		}
 	case []int64:
@@ -167,8 +199,10 @@ func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			msg.Metadata.PutValue(KeyLoopIndex, strconv.Itoa(index))
 			msg.Metadata.PutValue(KeyLoopItem, str.ToString(item))
 			// 执行并，检查是否有取消请求
-			if err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
+			if itemDataList, err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
 				break
+			} else if x.Config.Sync {
+				resultData = append(resultData, x.toList(msg.DataType, itemDataList)...)
 			}
 		}
 	case []float64:
@@ -176,8 +210,10 @@ func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			msg.Metadata.PutValue(KeyLoopIndex, strconv.Itoa(index))
 			msg.Metadata.PutValue(KeyLoopItem, str.ToString(item))
 			// 执行并，检查是否有取消请求
-			if err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
+			if itemDataList, err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
 				break
+			} else if x.Config.Sync {
+				resultData = append(resultData, x.toList(msg.DataType, itemDataList)...)
 			}
 		}
 	case map[string]interface{}:
@@ -187,19 +223,26 @@ func (x *ForNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 			msg.Metadata.PutValue(KeyLoopKey, k)
 			msg.Metadata.PutValue(KeyLoopItem, str.ToString(item))
 			// 执行并，检查是否有取消请求
-			if err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
+			if itemDataList, err = x.executeItem(ctxWithCancel, ctx, msg); err != nil {
 				break
+			} else if x.Config.Sync {
+				resultData = append(resultData, x.toList(msg.DataType, itemDataList)...)
 			}
 			index++
 		}
 	default:
-		err = errors.New("value is not a supported. must array slice or struct type")
+		err = errors.New("must array slice or struct type")
 	}
-	//不修改in data
-	msg.Data = inData
+
 	if err != nil {
 		ctx.TellFailure(msg, err)
 	} else {
+		if x.Config.Sync {
+			msg.Data = str.ToString(resultData)
+		} else {
+			//不修改in data
+			msg.Data = inData
+		}
 		ctx.TellSuccess(msg)
 	}
 }
@@ -209,11 +252,12 @@ func (x *ForNode) Destroy() {
 }
 
 // executeItem processes each item during iteration.
-func (x *ForNode) executeItem(ctxWithCancel context.Context, ctx types.RuleContext, fromMsg types.RuleMsg) error {
+func (x *ForNode) executeItem(ctxWithCancel context.Context, ctx types.RuleContext, fromMsg types.RuleMsg) ([]string, error) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	var returnErr error
 	var lock sync.Mutex
+	var msgData []string
 	if x.ruleNodeId.Type == types.CHAIN {
 		ctx.TellFlow(ctx.GetContext(), x.ruleNodeId.Id, fromMsg, func(ctx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
 			if err != nil {
@@ -225,6 +269,7 @@ func (x *ForNode) executeItem(ctxWithCancel context.Context, ctx types.RuleConte
 				for k, v := range msg.Metadata {
 					fromMsg.Metadata.PutValue(k, v)
 				}
+				msgData = append(msgData, msg.Data)
 			}
 		}, func() {
 			wg.Done()
@@ -240,6 +285,7 @@ func (x *ForNode) executeItem(ctxWithCancel context.Context, ctx types.RuleConte
 				for k, v := range msg.Metadata {
 					fromMsg.Metadata.PutValue(k, v)
 				}
+				msgData = append(msgData, msg.Data)
 			}
 		}, func() {
 			wg.Done()
@@ -248,9 +294,9 @@ func (x *ForNode) executeItem(ctxWithCancel context.Context, ctx types.RuleConte
 	wg.Wait()
 
 	if returnErr != nil {
-		return returnErr
+		return msgData, returnErr
 	} else {
-		return ctxWithCancel.Err()
+		return msgData, ctxWithCancel.Err()
 	}
 }
 
