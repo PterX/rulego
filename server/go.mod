@@ -6,8 +6,9 @@ require (
 	github.com/cloudwego/eino v0.9.10
 	github.com/dop251/goja v0.0.0-20231024180952-594410467bc6
 	github.com/golang-jwt/jwt/v5 v5.2.2
+	github.com/julienschmidt/httprouter v1.3.0
 	github.com/mark3labs/mcp-go v0.44.0
-	github.com/rulego/rulego v0.37.2
+	github.com/rulego/rulego v0.37.3-0.20260906084422-d82d7edc536a
 	github.com/rulego/rulego-components v0.37.1-0.20260816115602-d2ee85cba44c
 	github.com/rulego/rulego-components-ai v0.37.1-0.20260816034014-d5312a602f16
 	github.com/rulego/rulego-components-ci v0.36.0
@@ -165,7 +166,6 @@ require (
 	github.com/jhump/protoreflect v1.17.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/julienschmidt/httprouter v1.3.0 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
