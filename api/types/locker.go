@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -249,6 +250,31 @@ func WithGuardFailOpen() OnceGuardOption {
 	return func(g *OnceGuard) {
 		g.failOpen = true
 	}
+}
+
+// OnceScope builds a OnceGuard scope from a component type followed by
+// identity segments such as owner, chain id and router id. Empty segments are
+// skipped, so callers can pass optional values directly. Pass the component's
+// own Type constant as the first argument.
+//
+// Example: OnceScope(schedule.Type, owner, chainId, routerId).
+//
+// OnceScope 按「组件类型 + 身份段」组装 OnceGuard 的 scope，身份段通常是
+// 所属者、链 ID、路由 ID 等。空段自动跳过，可选值可直接传入。
+// 第一个参数直接传组件自身的 Type 常量。
+//
+// 示例：OnceScope(schedule.Type, owner, chainId, routerId)。
+func OnceScope(component string, segments ...string) string {
+	var sb strings.Builder
+	sb.WriteString(component)
+	for _, segment := range segments {
+		if segment == "" {
+			continue
+		}
+		sb.WriteByte(':')
+		sb.WriteString(segment)
+	}
+	return sb.String()
 }
 
 // NewOnceGuard creates a guard bound to ruleConfig.Locker. scope isolates

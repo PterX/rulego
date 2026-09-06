@@ -213,6 +213,14 @@ type Schedule struct {
 	// id 是此 Schedule 端点实例的唯一标识符
 	id string
 
+	// chainId is the id of the rule chain this endpoint belongs to. It is
+	// taken from the chain definition injected into Init and goes into the
+	// once-guard scope, so identical router ids in different chains never
+	// share a dedup key. Empty when the endpoint is created standalone.
+	// chainId 是本端点所属规则链的 ID，取自 Init 注入的链定义，
+	// 参与去重键：不同链的同名路由不会共享去重键。独立创建时为空。
+	chainId string
+
 	// BaseEndpoint provides common endpoint functionality
 	// BaseEndpoint 提供通用端点功能
 	impl.BaseEndpoint
@@ -274,6 +282,9 @@ func (schedule *Schedule) New() types.Node {
 // Init 初始化
 func (schedule *Schedule) Init(ruleConfig types.Config, configuration types.Configuration) error {
 	schedule.RuleConfig = ruleConfig
+	if def := schedule.GetRuleChainDefinition(configuration); def != nil {
+		schedule.chainId = def.RuleChain.ID
+	}
 	return nil
 }
 
@@ -363,7 +374,8 @@ func (schedule *Schedule) newOnceJob(router endpoint.Router, spec cron.Schedule)
 	if routerId == "" {
 		routerId = router.GetFrom().ToString()
 	}
-	guard := types.NewOnceGuard(schedule.RuleConfig, "schedule:"+schedule.RuleConfig.Owner+":"+routerId)
+	guard := types.NewOnceGuard(schedule.RuleConfig,
+		types.OnceScope(Type, schedule.RuleConfig.Owner, schedule.chainId, routerId))
 	var mu sync.Mutex
 	next := spec.Next(time.Now())
 	return func() {

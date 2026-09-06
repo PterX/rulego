@@ -282,3 +282,16 @@ func TestOnceGuardTTLOption(t *testing.T) {
 		t.Fatalf("custom TTL should reach the Locker, want 5m got %v", locker.ttl)
 	}
 }
+
+func TestOnceScope(t *testing.T) {
+	if got := OnceScope("schedule", "tenantA", "chain1", "r1"); got != "schedule:tenantA:chain1:r1" {
+		t.Fatalf("unexpected scope %q", got)
+	}
+	// 空段跳过：单机无 owner、独立创建无链 ID
+	if got := OnceScope("schedule", "", "", "r1"); got != "schedule:r1" {
+		t.Fatalf("empty segments should be skipped, got %q", got)
+	}
+	if got := OnceScope("mqtt", "tenantB"); got != "mqtt:tenantB" {
+		t.Fatalf("unexpected scope %q", got)
+	}
+}

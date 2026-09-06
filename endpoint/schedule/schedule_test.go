@@ -306,3 +306,38 @@ func TestScheduleClusterOnceOwnerIsolation(t *testing.T) {
 	n := atomic.LoadInt64(&count)
 	assert.True(t, n >= 5 && n <= 8, fmt.Sprintf("expected 5-8 ticks for two tenants, got %d", n))
 }
+
+func TestScheduleClusterOnceChainIsolation(t *testing.T) {
+	buf, err := os.ReadFile(testdataFolder + "/chain_msg_type_switch.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 同租户、同名路由、相同 cron、不同链：互不压制（链 ID 进去重键）
+	config := engine.NewConfig(types.WithDefaultPool(), types.WithLocker(types.NewLocalLocker()))
+	_, _ = engine.New("default", buf, engine.WithConfig(config))
+
+	var count int64
+	newChainEndpoint := func(chainId string) *Endpoint {
+		ep := &Endpoint{}
+		nodeConfig := types.Configuration{types.NodeConfigurationKeyRuleChainDefinition: &types.RuleChain{RuleChain: types.RuleChainBaseInfo{ID: chainId}}}
+		assert.Nil(t, ep.Init(config, nodeConfig))
+		assert.Equal(t, chainId, ep.chainId)
+		router := impl.NewRouter().SetId("ep_timer_r1").From("*/1 * * * * *").Process(func(router endpoint.Router, exchange *endpoint.Exchange) bool {
+			atomic.AddInt64(&count, 1)
+			return true
+		}).To("chain:default").End()
+		_, err := ep.AddRouter(router)
+		assert.Nil(t, err)
+		assert.Nil(t, ep.Start())
+		return ep
+	}
+	endpointA := newChainEndpoint("chainA")
+	defer endpointA.Destroy()
+	endpointB := newChainEndpoint("chainB")
+	defer endpointB.Destroy()
+
+	time.Sleep(3200 * time.Millisecond)
+	// 两条独立定时各执行一遍（约 6-8 次）；若去重键缺链 ID 则会被压到 2-4
+	n := atomic.LoadInt64(&count)
+	assert.True(t, n >= 5 && n <= 8, fmt.Sprintf("expected 5-8 ticks for two chains, got %d", n))
+}
