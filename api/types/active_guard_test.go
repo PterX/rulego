@@ -49,7 +49,7 @@ func TestActiveGuardWithoutLockerAlwaysActive(t *testing.T) {
 func TestActiveGuardSingleLeader(t *testing.T) {
 	locker := NewLocalLocker()
 
-	var leaders atomic.Int32
+	var leaders int32
 	promotedWg1 := make(chan struct{})
 	promotedWg2 := make(chan struct{})
 	var promotedOnce1, promotedOnce2 sync.Once
@@ -61,7 +61,7 @@ func TestActiveGuardSingleLeader(t *testing.T) {
 	g1 := NewActiveGuard(Config{Locker: locker}, "election:test",
 		WithActiveTTL(time.Second), WithActiveInterval(50*time.Millisecond))
 	go g1.Run(ctx1, func() error {
-		leaders.Add(1)
+		atomic.AddInt32(&leaders, 1)
 		promotedOnce1.Do(func() { close(promotedWg1) })
 		return nil
 	}, nil)
@@ -71,7 +71,7 @@ func TestActiveGuardSingleLeader(t *testing.T) {
 	g2 := NewActiveGuard(Config{Locker: locker}, "election:test",
 		WithActiveTTL(time.Second), WithActiveInterval(50*time.Millisecond))
 	go g2.Run(ctx2, func() error {
-		leaders.Add(1)
+		atomic.AddInt32(&leaders, 1)
 		promotedOnce2.Do(func() { close(promotedWg2) })
 		return nil
 	}, nil)
@@ -102,7 +102,7 @@ func TestActiveGuardSingleLeader(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("standby did not take over after leader shutdown")
 	}
-	if n := leaders.Load(); n != 2 {
+	if n := atomic.LoadInt32(&leaders); n != 2 {
 		t.Fatalf("expected exactly one leader at a time, got %d promotions", n)
 	}
 }
@@ -142,11 +142,11 @@ func TestActiveGuardPromoteError(t *testing.T) {
 // flakyRenewer 在 fail 置位时模拟续约失败（键被接管或后端故障）。
 type flakyRenewer struct {
 	*LocalLocker
-	fail atomic.Bool
+	fail int32
 }
 
 func (f *flakyRenewer) Renew(ctx context.Context, key, token string, expiration time.Duration) (bool, error) {
-	if f.fail.Load() {
+	if atomic.LoadInt32(&f.fail) == 1 {
 		return false, nil
 	}
 	return f.LocalLocker.Renew(ctx, key, token, expiration)
@@ -178,7 +178,7 @@ func TestActiveGuardRenewFailure(t *testing.T) {
 	}
 
 	// 续约失败 → 降级
-	locker.fail.Store(true)
+	atomic.StoreInt32(&locker.fail, 1)
 	select {
 	case <-demoted1:
 	case <-time.After(2 * time.Second):
@@ -189,7 +189,7 @@ func TestActiveGuardRenewFailure(t *testing.T) {
 	}
 
 	// 恢复后 g2 接管成为 leader
-	locker.fail.Store(false)
+	atomic.StoreInt32(&locker.fail, 0)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	g2 := newGuard()
