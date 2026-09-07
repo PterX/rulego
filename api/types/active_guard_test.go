@@ -201,7 +201,11 @@ func TestActiveGuardRenewFailure(t *testing.T) {
 	defer cancel1()
 	g1 := newGuard()
 	demoted1 := make(chan struct{})
-	go g1.Run(ctx1, func() error { return nil }, func() { close(demoted1) })
+	var demotedOnce sync.Once
+	// onDemoted 契约要求可重入：ctx 退出路径也会调用
+	go g1.Run(ctx1, func() error { return nil }, func() {
+		demotedOnce.Do(func() { close(demoted1) })
+	})
 
 	// 轮询等待成为 leader
 	deadline := time.Now().Add(2 * time.Second)
