@@ -90,6 +90,8 @@ github.com/alibabacloud-go/tea-utils/v2 v2.0.7 h1:WDx5qW3Xa5ZgJ1c8NfqJkF6w+AU5wB
 github.com/alibabacloud-go/tea-utils/v2 v2.0.7/go.mod h1:qxn986l+q33J5VkialKMqT/TTs3E+U9MJpd001iWQ9I=
 github.com/alibabacloud-go/tea-xml v1.1.3 h1:7LYnm+JbOq2B+T/B0fHC4Ies4/FofC4zHzYtqw7dgt0=
 github.com/alibabacloud-go/tea-xml v1.1.3/go.mod h1:Rq08vgCcCAjHyRi/M7xlHKUykZCEtyBy9+DPF6GgEu8=
+github.com/alicebob/miniredis/v2 v2.35.0 h1:QwLphYqCEAo1eu1TqPRN2jgVMPBweeQcR21jeqDCONI=
+github.com/alicebob/miniredis/v2 v2.35.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/aliyun/alibaba-cloud-sdk-go v1.61.1800 h1:ie/8RxBOfKZWcrbYSJi2Z8uX8TcOlSMwPlEJh83OeOw=
 github.com/aliyun/alibaba-cloud-sdk-go v1.61.1800/go.mod h1:RcDobYh8k5VP6TNybz9m++gL3ijVI5wueVr0EM10VsU=
 github.com/aliyun/alibabacloud-dkms-gcs-go-sdk v0.5.1 h1:nJYyoFP+aqGKgPs9JeZgS1rWQ4NndNR0Zfhh161ZltU=
@@ -674,10 +676,10 @@ github.com/rogpeppe/go-internal v1.6.1/go.mod h1:xXDCJY+GAPziupqXw64V24skbSoqbTE
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/rollbar/rollbar-go v1.0.2/go.mod h1:AcFs5f0I+c71bpHlXNNDbOWJiKwjFDtISeXco0L5PKQ=
-github.com/rulego/rulego v0.37.3-0.20260906084422-d82d7edc536a h1:8R9KPgU7IYFHyr8BRT8DvJmJ9TMV8+IEKwm9XzLaj38=
-github.com/rulego/rulego v0.37.3-0.20260906084422-d82d7edc536a/go.mod h1:C+5ohZtTIBNB4l1UY3aVLX+OKAXOHbryRn0I3+no8cs=
-github.com/rulego/rulego-components v0.37.1-0.20260816115602-d2ee85cba44c h1:f3jvG9kzK8/oF0VRMCz91Q1Z6K+aEUXUSmHSyBxLeb8=
-github.com/rulego/rulego-components v0.37.1-0.20260816115602-d2ee85cba44c/go.mod h1:lePaGoYkXNluvdZFp2oZDG6wo8NCu4Prv9AqK9+U+VY=
+github.com/rulego/rulego v0.37.3-0.20260907031433-ee1e524fe9bb h1:94x+UTsxKvcJJTU7lgA8GPASwV0wYYWZ58oDbm4+ok4=
+github.com/rulego/rulego v0.37.3-0.20260907031433-ee1e524fe9bb/go.mod h1:C+5ohZtTIBNB4l1UY3aVLX+OKAXOHbryRn0I3+no8cs=
+github.com/rulego/rulego-components v0.37.1-0.20260907031859-d600b19e7850 h1:+Ueu+VRrEMiLKCL5dnE07ITrY9XCJcjhpVRGIzobyIc=
+github.com/rulego/rulego-components v0.37.1-0.20260907031859-d600b19e7850/go.mod h1:PqzzNaz0UI84lkFvE+JxLnkBq7JbqJXDUKEsyCOtuLw=
 github.com/rulego/rulego-components-ai v0.37.1-0.20260816034014-d5312a602f16 h1:8FyisqQNR6J17CTUxWTVX6ONzG09/V9kCknF52Eij98=
 github.com/rulego/rulego-components-ai v0.37.1-0.20260816034014-d5312a602f16/go.mod h1:xdl9QbrKEDO33BQGkHuKDEL0pB1db6vAHfNTr4zuIh0=
 github.com/rulego/rulego-components-ci v0.36.0 h1:jNBrm/fRKIRSVM26pCszH+qxjJ+yRRXcwmJnfxhTzcw=
