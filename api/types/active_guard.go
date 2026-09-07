@@ -229,14 +229,18 @@ func (g *ActiveGuard) tick(ctx context.Context, onPromoted func() error, onDemot
 		if !ok {
 			return
 		}
-		if err := onPromoted(); err != nil {
-			g.logf("warn", "active guard %s activate: %v", g.key, err)
-			g.release(t)
-			return
-		}
+		// 先落激活态再回调：onPromoted 内部查询 IsActive 必须看到租约已持有
 		g.mu.Lock()
 		g.active, g.token = true, t
 		g.mu.Unlock()
+		if err := onPromoted(); err != nil {
+			g.logf("warn", "active guard %s activate: %v", g.key, err)
+			g.mu.Lock()
+			g.active, g.token = false, ""
+			g.mu.Unlock()
+			g.release(t)
+			return
+		}
 		g.logf("info", "active guard %s acquired", g.key)
 		return
 	}

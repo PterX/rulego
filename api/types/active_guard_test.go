@@ -76,17 +76,32 @@ func TestActiveGuardSingleLeader(t *testing.T) {
 		return nil
 	}, nil)
 
-	<-promotedWg1
+	// 两副本同时开抢，谁先晋升不确定，等任一即可
+	var leaderCancel context.CancelFunc
+	var standbyPromoted chan struct{}
 	select {
+	case <-promotedWg1:
+		leaderCancel, standbyPromoted = cancel1, promotedWg2
 	case <-promotedWg2:
+		leaderCancel, standbyPromoted = cancel2, promotedWg1
+	case <-time.After(5 * time.Second):
+		t.Fatal("no leader elected")
+	}
+
+	// 待命副本不得并发晋升
+	select {
+	case <-standbyPromoted:
 		t.Fatalf("two replicas promoted concurrently")
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	// leader 停机释放租约后，待命副本必须接管
-	cancel1()
-	<-promotedWg2
-
+	// leader 停机释放租约后，待命副本必须在轮询周期内接管
+	leaderCancel()
+	select {
+	case <-standbyPromoted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("standby did not take over after leader shutdown")
+	}
 	if n := leaders.Load(); n != 2 {
 		t.Fatalf("expected exactly one leader at a time, got %d promotions", n)
 	}
