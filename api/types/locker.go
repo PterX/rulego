@@ -29,8 +29,23 @@ import (
 
 // Locker is a distributed key lock abstraction shared by endpoints, nodes and hosts.
 // Implementations must be safe for concurrent use by multiple goroutines.
+// Multi-replica deployments need an implementation whose state is shared
+// across processes; LocalLocker coordinates goroutines within one process
+// only.
 //
-// Locker 是端点、组件与宿主共用的分布式键锁抽象。实现必须支持多协程并发调用。
+// Requirements that the cross-replica semantics depend on:
+//   - keys expire by themselves after expiration, even if the holder never
+//     unlocks: OnceGuard dedup relies on this to bound its retention, and
+//     ActiveGuard takeover relies on this to bound the failover delay
+//   - Unlock must verify the token before releasing
+//
+// Locker 是端点、组件与宿主共用的分布式键锁抽象。实现必须支持多协程并发调用；
+// 多副本部署须选择跨进程共享状态的实现，LocalLocker 仅协调单进程内的协程。
+//
+// 跨副本语义依赖两条实现契约：
+//   - 键到达 expiration 后自行失效，即使持有方从未 Unlock：OnceGuard 去重的
+//     保留上限、ActiveGuard 接管延迟的上限都以此为界
+//   - Unlock 释放前必须校验 token
 type Locker interface {
 	// Lock acquires the lock, blocking until it is obtained or ctx is done,
 	// and returns the token used to release it.
@@ -115,6 +130,21 @@ func (l *LocalLocker) Unlock(_ context.Context, key, token string) error {
 func (l *LocalLocker) TryLock(_ context.Context, key string, expiration time.Duration) (string, bool, error) {
 	token, ok := l.tryLock(key, expiration)
 	return token, ok, nil
+}
+
+// Renew extends the TTL of the caller's own unexpired lock entry; it returns
+// false when the key is missing, expired, or held with a different token.
+// Renew 顺延自身未过期的持锁条目 TTL；键不存在、已过期或凭证不匹配时返回 false。
+func (l *LocalLocker) Renew(_ context.Context, key, token string, expiration time.Duration) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.locks[key]
+	if !ok || entry.token != token || !time.Now().Before(entry.expireAt) {
+		return false, nil
+	}
+	entry.expireAt = time.Now().Add(expiration)
+	l.locks[key] = entry
+	return true, nil
 }
 
 // LockWithRetry 先立即尝试一次，之后每隔 retryInterval 重试，最多重试 maxRetries 次。

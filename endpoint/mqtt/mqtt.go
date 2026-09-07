@@ -136,6 +136,14 @@
 // • Single-level wildcard: "sensors/+/status"  单级通配符
 // • Multi-level wildcard: "sensors/#"  多级通配符
 //
+// Multi-instance Deployment / 多实例部署：
+//
+// Plain subscriptions deliver every message to every replica. Use a shared
+// subscription as the router From, e.g. "$share/g1/sensors/#", so the broker
+// load-balances each message to one member of the group.
+// 普通订阅会把每条消息投递给所有副本。把路由 From 写成共享订阅，
+// 如 "$share/g1/sensors/#"，由 broker 在组内负载均衡，每条消息只投一个副本。
+//
 // Response Publishing / 响应发布：
 //
 // Response messages can be published by setting metadata:

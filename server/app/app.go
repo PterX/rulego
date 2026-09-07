@@ -14,8 +14,8 @@ import (
 
 	"github.com/rulego/rulego/api/types"
 	"github.com/rulego/rulego/server/config"
-	"github.com/rulego/rulego/server/internal/store/filestore"
 	srvLogger "github.com/rulego/rulego/server/internal/logger"
+	"github.com/rulego/rulego/server/internal/store/filestore"
 	"github.com/rulego/rulego/server/services"
 )
 
@@ -203,10 +203,10 @@ func (a *App) Stop() error {
 			a.typesLog.Errorf("[stop] error stopping module %s: %v", m.Name(), err)
 		}
 	}
-		// 关闭存储提供者（释放 BBolt 等资源）
-		if provider, err := GetAs[*filestore.FileStoreProvider](a.container, "store.provider"); err == nil {
-			provider.Close()
-		}
+	// 关闭存储提供者（释放 BBolt 等资源）
+	if provider, err := GetAs[*filestore.FileStoreProvider](a.container, "store.provider"); err == nil {
+		provider.Close()
+	}
 
 	a.started = false
 	return firstErr
@@ -367,9 +367,9 @@ func (a *App) Run() error {
 
 // loadConfig 加载配置文件。
 // 查找策略：
-//   1. 如果指定了 -c 且文件存在 → 从文件加载
-//   2. 如果未指定 -c，自动查找当前目录的 config.conf → 找到则加载
-//   3. 以上都不满足 → 使用 DefaultConfig
+//  1. 如果指定了 -c 且文件存在 → 从文件加载
+//  2. 如果未指定 -c，自动查找当前目录的 config.conf → 找到则加载
+//  3. 以上都不满足 → 使用 DefaultConfig
 func (a *App) loadConfig() error {
 	// 编程式配置优先（嵌入模式宿主直接注入）
 	if a.opts.Config != nil {
