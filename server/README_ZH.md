@@ -381,6 +381,8 @@ llm_api_key = ${OPENAI_API_KEY}
 llm_model = gpt-4
 ```
 
+多实例部署（跨副本去重、广播端点单活）由嵌入宿主程序化注入分布式 `Locker` 实现——独立部署使用文件存储，按单实例设计。详见 [分布式部署](https://rulego.cc/pages/rulego-server-distributed/)。
+
 ## 通过自然语言管理规则链（MCP）
 
 RuleGo Server 内置 MCP 服务，允许 AI 智能体通过自然语言生成、修改和管理规则链。详细配置和 AI IDE 集成请参阅 [MCP 文档](docs/mcp_zh.md)。

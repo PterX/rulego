@@ -385,6 +385,8 @@ llm_api_key = ${OPENAI_API_KEY}
 llm_model = gpt-4
 ```
 
+Multi-instance deployments (cross-replica dedup and single-active endpoints) are enabled by the embedding host injecting a distributed `Locker` programmatically — standalone file-storage deployments are single-instance by design. See [Distributed Deployment](https://rulego.cc/en/pages/rulego-server-distributed/).
+
 ## Managing Rule Chains via Natural Language (MCP)
 
 RuleGo Server includes a built-in MCP (Model Context Protocol) service that allows AI agents to generate, modify, and manage rule chains through natural language. For detailed configuration and AI IDE integration, see the [MCP documentation](docs/mcp_en.md).
