@@ -567,6 +567,10 @@ func (e *DynamicEndpoint) newEndpoint(dsl types.EndpointDsl) error {
 	if def != nil {
 		configuration[types.NodeConfigurationKeyRuleChainDefinition] = def
 	}
+	//注入端点节点身份：Id 跨副本一致且链内唯一，供分布式选主等语义取用
+	if dsl.Id != "" {
+		configuration[types.NodeConfigurationKeySelfDefinition] = dsl.RuleNode
+	}
 	if ep, err := Registry.New(dsl.Type, e.ruleConfig, configuration); err != nil {
 		return err
 	} else {

@@ -113,13 +113,18 @@ func WithActiveTTL(ttl time.Duration) ActiveGuardOption {
 	}
 }
 
-// WithActiveInterval sets the renew and takeover poll cadence. It defaults to
-// a third of the TTL.
-// WithActiveInterval 设置续约与接管轮询周期，默认为 TTL 的三分之一。
+// WithActiveInterval sets the renew and takeover poll cadence. The cadence is
+// at most a third of the TTL; anything longer would let the lease expire
+// before the next renewal.
+// WithActiveInterval 设置续约与接管轮询周期，上限为 TTL 的三分之一，
+// 否则租约会在下一次续约前到期。
 func WithActiveInterval(d time.Duration) ActiveGuardOption {
 	return func(g *ActiveGuard) {
 		if d > 0 {
 			g.interval = d
+			if g.ttl > 0 && g.interval > g.ttl/3 {
+				g.interval = g.ttl / 3
+			}
 		}
 	}
 }
@@ -172,9 +177,9 @@ func (g *ActiveGuard) IsActive() bool {
 // take the lease; as leader it renews it. Losing the lease — expired, taken
 // over, or backend failure — invokes onDemoted and returns to standby, so a
 // demoted leader stops consuming and a recovered backend restarts consuming.
-// onPromoted returning an error releases the lease and stays standby. It is
-// invoked once per leadership episode and must not block; onDemoted must be
-// idempotent.
+// onPromoted returning an error invokes onDemoted — to clean up partially
+// started resources — releases the lease and stays standby. It is invoked once
+// per leadership episode and must not block; onDemoted must be idempotent.
 //
 // Run 驱动选主直到 ctx 结束，阻塞执行，需在协程中运行。
 //
@@ -183,8 +188,9 @@ func (g *ActiveGuard) IsActive() bool {
 //
 // 配置 Locker 后每个周期轮询一次：待命态尝试抢占租约，持有态续约。租约丢失
 // ——过期、被接管、后端故障——会回调 onDemoted 并回到待命态，被降级副本因此
-// 停止消费，后端恢复后重新开抢。onPromoted 返回错误则释放租约保持待命。它在
-// 每次成为 leader 时执行一次且不得阻塞；onDemoted 必须可重入。
+// 停止消费，后端恢复后重新开抢。onPromoted 返回错误则先回调 onDemoted 清理
+// 已部分启动的资源，再释放租约保持待命。它在每次成为 leader 时执行一次且
+// 不得阻塞；onDemoted 必须可重入。
 func (g *ActiveGuard) Run(ctx context.Context, onPromoted func() error, onDemoted func()) {
 	if g == nil {
 		return
@@ -201,9 +207,14 @@ func (g *ActiveGuard) Run(ctx context.Context, onPromoted func() error, onDemote
 	for {
 		select {
 		case <-ctx.Done():
+			// 先停消费再释放租约：避免待命副本接管后与本副本残余消费重叠
 			g.mu.Lock()
 			token := g.token
+			g.active, g.token = false, ""
 			g.mu.Unlock()
+			if onDemoted != nil {
+				onDemoted()
+			}
 			if token != "" {
 				g.release(token)
 			}
@@ -212,6 +223,33 @@ func (g *ActiveGuard) Run(ctx context.Context, onPromoted func() error, onDemote
 		}
 		g.tick(ctx, onPromoted, onDemoted)
 		timer.Reset(g.interval)
+	}
+}
+
+// Demote gives up the lease on behalf of the caller — typically the leader's
+// watched resource (a canal reader, a subscription) has died while the lease
+// still renews. No-op when not currently active. Safe to call from any
+// goroutine.
+// Demote 代表调用方放弃租约——典型场景是 leader 监听的资源（binlog 读取器、
+// 订阅）已死而租约仍在续约。非活跃态时无操作。任意协程可安全调用。
+func (g *ActiveGuard) Demote(onDemoted func()) {
+	if g == nil || g.locker == nil {
+		return
+	}
+	g.mu.Lock()
+	active, token := g.active, g.token
+	if !active {
+		g.mu.Unlock()
+		return
+	}
+	g.active, g.token = false, ""
+	g.mu.Unlock()
+	if token != "" {
+		g.release(token)
+	}
+	g.logf("warn", "active guard %s demoted by consumer", g.key)
+	if onDemoted != nil {
+		onDemoted()
 	}
 }
 
@@ -238,6 +276,9 @@ func (g *ActiveGuard) tick(ctx context.Context, onPromoted func() error, onDemot
 			g.mu.Lock()
 			g.active, g.token = false, ""
 			g.mu.Unlock()
+			if onDemoted != nil {
+				onDemoted()
+			}
 			g.release(t)
 			return
 		}

@@ -20,6 +20,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+
+	"github.com/rulego/rulego/api/types"
 )
 
 // ConfigKey derives a stable identity from component configuration: identical
@@ -36,4 +38,20 @@ func ConfigKey(configuration interface{}) string {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
+}
+
+// NodeIdOf reads the endpoint node Id injected via
+// NodeConfigurationKeySelfDefinition. The Id is stable across replicas and
+// unique within its chain, which makes it the preferred instance identity for
+// election scopes; returns empty when absent (direct instantiation, tests).
+// NodeIdOf 读取端点节点 Id（NodeConfigurationKeySelfDefinition 注入）。
+// 该 Id 跨副本一致且链内唯一，是选主 scope 的首选实例标识；未注入时返回空
+// （直接实例化、测试场景）。
+func NodeIdOf(configuration types.Configuration) string {
+	if v, ok := configuration[types.NodeConfigurationKeySelfDefinition]; ok {
+		if rn, ok := v.(types.RuleNode); ok {
+			return rn.Id
+		}
+	}
+	return ""
 }

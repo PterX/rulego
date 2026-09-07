@@ -107,10 +107,11 @@ func TestActiveGuardSingleLeader(t *testing.T) {
 	}
 }
 
-// TestActiveGuardPromoteError 覆盖 onPromoted 失败：释放租约并保持待命，
-// 由其他副本接管。
+// TestActiveGuardPromoteError 覆盖 onPromoted 失败：回调 onDemoted 清理已部分
+// 启动的资源、释放租约并保持待命，由其他副本接管。
 func TestActiveGuardPromoteError(t *testing.T) {
 	locker := NewLocalLocker()
+	var demoted int32
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
@@ -118,9 +119,23 @@ func TestActiveGuardPromoteError(t *testing.T) {
 		WithActiveTTL(200*time.Millisecond), WithActiveInterval(50*time.Millisecond))
 	go g1.Run(ctx1, func() error {
 		return context.DeadlineExceeded
-	}, nil)
+	}, func() {
+		atomic.AddInt32(&demoted, 1)
+	})
 
-	// g1 拿到租约但激活失败，g2 最终必须能成为 leader
+	// 先等首个副本完成一轮晋升失败并回调 onDemoted，再启动第二个副本；
+	// 同时启动时无法确定谁先抢到租约
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&demoted) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("first guard never attempted a promotion")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	// 晋升失败的副本释放租约后，其余副本最终能成为 leader
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	g2 := NewActiveGuard(Config{Locker: locker}, "election:err",
@@ -136,6 +151,26 @@ func TestActiveGuardPromoteError(t *testing.T) {
 	case <-promoted2:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("standby did not take over after promote failure")
+	}
+}
+
+// TestActiveGuardIntervalClamp 轮询周期不得超过 TTL 的三分之一，
+// 选项先后顺序不影响该上界。
+func TestActiveGuardIntervalClamp(t *testing.T) {
+	g := NewActiveGuard(Config{}, "test:clamp",
+		WithActiveTTL(300*time.Millisecond), WithActiveInterval(time.Second))
+	if g.interval != 100*time.Millisecond {
+		t.Fatalf("expected interval clamped to ttl/3, got %v", g.interval)
+	}
+	g = NewActiveGuard(Config{}, "test:clamp",
+		WithActiveInterval(time.Second), WithActiveTTL(300*time.Millisecond))
+	if g.interval != 100*time.Millisecond {
+		t.Fatalf("expected interval clamped to ttl/3 regardless of option order, got %v", g.interval)
+	}
+	g = NewActiveGuard(Config{}, "test:clamp",
+		WithActiveTTL(300*time.Millisecond), WithActiveInterval(50*time.Millisecond))
+	if g.interval != 50*time.Millisecond {
+		t.Fatalf("interval below the bound must be kept, got %v", g.interval)
 	}
 }
 
@@ -168,11 +203,11 @@ func TestActiveGuardRenewFailure(t *testing.T) {
 	demoted1 := make(chan struct{})
 	go g1.Run(ctx1, func() error { return nil }, func() { close(demoted1) })
 
-	// 等 g1 成为 leader
+	// 轮询等待成为 leader
 	deadline := time.Now().Add(2 * time.Second)
 	for !g1.IsActive() {
 		if time.Now().After(deadline) {
-			t.Fatalf("g1 never became leader")
+			t.Fatalf("guard never became leader")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -188,7 +223,8 @@ func TestActiveGuardRenewFailure(t *testing.T) {
 		t.Fatalf("guard should be standby after renew failure")
 	}
 
-	// 恢复后 g2 接管成为 leader
+	// 已降级副本先退出再恢复续约：它仍在轮询，恢复后可能自己重新抢到租约
+	cancel1()
 	atomic.StoreInt32(&locker.fail, 0)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
