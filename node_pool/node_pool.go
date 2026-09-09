@@ -315,6 +315,9 @@ func (n *NodePool) NewFromEndpoint(def types.EndpointDsl) (types.SharedNodeCtx, 
 			return nil, ErrNotImplemented
 		} else {
 			rCtx := newSharedNodeCtx(nil, ctx)
+			if err := n.validateRefCycle(rCtx); err != nil {
+				return nil, err
+			}
 			n.entries.Store(rCtx.GetNodeId().Id, rCtx)
 			return rCtx, nil
 		}
@@ -336,6 +339,9 @@ func (n *NodePool) NewFromRuleNode(def types.RuleNode) (types.SharedNodeCtx, err
 			return nil, ErrNotImplemented
 		} else {
 			rCtx := newSharedNodeCtx(ctx, nil)
+			if err := n.validateRefCycle(rCtx); err != nil {
+				return nil, err
+			}
 			n.entries.Store(rCtx.GetNodeId().Id, rCtx)
 			return rCtx, nil
 		}
@@ -369,6 +375,9 @@ func (n *NodePool) addEndpointNode(endpointNode endpointApi.Endpoint) (types.Sha
 		return nil, ErrNotImplemented
 	} else {
 		rCtx := newSharedNodeCtx(nil, endpointNode)
+		if err := n.validateRefCycle(rCtx); err != nil {
+			return nil, err
+		}
 		n.entries.Store(id, rCtx)
 		return rCtx, nil
 	}
@@ -386,6 +395,9 @@ func (n *NodePool) addNode(nodeCtx *engine.RuleNodeCtx) (types.SharedNodeCtx, er
 		return nil, ErrNotImplemented
 	} else {
 		rCtx := newSharedNodeCtx(nodeCtx, nil)
+		if err := n.validateRefCycle(rCtx); err != nil {
+			return nil, err
+		}
 		n.entries.Store(id, rCtx)
 		return rCtx, nil
 	}
@@ -460,6 +472,54 @@ func (n *NodePool) Get(id string) (types.SharedNodeCtx, bool) {
 		return v.(*sharedNodeCtx), ok
 	}
 	return nil, false
+}
+
+// validateRefCycle walks the new entry's ref:// borrow chain through existing
+// pool entries and rejects the registration when it closes a cycle. The ref
+// graph is static per configuration, so validating at registration (the moment
+// a cycle's last member lands) keeps runtime GetInstance recursion-free across
+// pool hops, which has no guard of its own. Missing targets are tolerated:
+// they may register later; unresolved refs still fail at message time.
+func (n *NodePool) validateRefCycle(ctx *sharedNodeCtx) error {
+	target := refTargetOf(ctx)
+	if target == "" {
+		return nil
+	}
+	seen := map[string]bool{ctx.GetNodeId().Id: true}
+	for {
+		if seen[target] {
+			return fmt.Errorf("circular ref:// reference in node pool: %s", target)
+		}
+		seen[target] = true
+		next, ok := n.Get(target)
+		if !ok {
+			return nil
+		}
+		if target = refTargetOf(next); target == "" {
+			return nil
+		}
+	}
+}
+
+// refTargetOf exposes a node's ref:// borrow target via the optional
+// base.SharedNode.RefTarget method, with the ref:// prefix stripped to a bare
+// pool id; nodes without it are not ref-aware.
+func refTargetOf(ctx types.SharedNodeCtx) string {
+	node := ctx.GetNode()
+	if node == nil {
+		return ""
+	}
+	g, ok := node.(interface{ RefTarget() string })
+	if !ok {
+		return ""
+	}
+	server := g.RefTarget()
+	// mirror base.NodeUtils.GetInstanceId: only ref:// values count as borrow targets
+	const prefix = types.NodeConfigurationPrefixInstanceId
+	if len(server) > len(prefix) && server[:len(prefix)] == prefix {
+		return server[len(prefix):]
+	}
+	return ""
 }
 
 // GetInstance retrieves a net client or server connection by its ID.

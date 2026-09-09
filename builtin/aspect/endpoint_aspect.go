@@ -136,7 +136,7 @@ func (aspect *EndpointAspect) OnCreated(ctx types.NodeCtx) error {
 		}
 		if ruleChainEndpoint, err := NewRuleChainEndpoint(ctx.GetNodeId().Id, chainCtx.Config(),
 			aspect.EndpointPool, chainCtx.GetRuleEnginePool(),
-			chainCtx.Definition(), chainCtx.Definition().Metadata.Endpoints); err != nil {
+			chainCtx.Definition(), chainCtx.Definition().Metadata.Endpoints, chainCtx); err != nil {
 			return err
 		} else {
 			aspect.ruleChainEndpoint = ruleChainEndpoint
@@ -207,6 +207,7 @@ func (aspect *EndpointAspect) OnReload(_ types.NodeCtx, ctx types.NodeCtx) error
 		}
 		aspect.ruleChainEndpoint.config = ctx.Config()
 		aspect.ruleChainEndpoint.ruleGoPool = chainCtx.GetRuleEnginePool()
+		aspect.ruleChainEndpoint.chainCtx = chainCtx
 		// Reload 后按最终存活状态同步资源目录（含 Reload 部分成功的情况）。
 		err := aspect.ruleChainEndpoint.Reload(chainCtx.Definition(), chainCtx.Definition().Metadata.Endpoints)
 		aspect.syncResources(chainCtx, nil, aspect.ruleChainEndpoint.GetEndpoints())
@@ -235,29 +236,82 @@ type RuleChainEndpoint struct {
 	ruleGoPool   types.RuleEnginePool
 	endpoints    map[string]endpoint.DynamicEndpoint
 	config       types.Config
+	// chainCtx 是部署所属链的上下文：注入每个 endpoint 的配置，
+	// 使其 SharedNode 可解析链内 ref://（借用同链节点/端点的连接）
+	chainCtx types.ChainCtx
 	sync.RWMutex
 }
 
-func NewRuleChainEndpoint(ruleEngineId string, config types.Config, endpointPool endpoint.Pool, ruleGoPool types.RuleEnginePool, ruleChain *types.RuleChain, defs []*types.EndpointDsl) (*RuleChainEndpoint, error) {
+func NewRuleChainEndpoint(ruleEngineId string, config types.Config, endpointPool endpoint.Pool, ruleGoPool types.RuleEnginePool, ruleChain *types.RuleChain, defs []*types.EndpointDsl, chainCtx types.ChainCtx) (*RuleChainEndpoint, error) {
 	ruleChainEndpoint := &RuleChainEndpoint{
 		ruleEngineId: ruleEngineId,
 		endpointPool: endpointPool,
 		ruleGoPool:   ruleGoPool,
-		config:       config,
 		endpoints:    make(map[string]endpoint.DynamicEndpoint),
+		config:       config,
+		chainCtx:     chainCtx,
 	}
+	// 两阶段部署：先创建全部实例（不挂路由不启动），全部注册进链资源目录后，
+	// 再统一挂路由+启动。这样同链 endpoint 订阅前已在链目录可见，ref:// 同链互借
+	// （endpoint→endpoint）在挂路由建连期即可解析到彼此。
+	eps := make([]endpoint.DynamicEndpoint, 0, len(defs))
 	for _, item := range defs {
 		if ruleChain != nil {
-			processEndpointDsl(ruleChainEndpoint.config, ruleChain, item)
+			processEndpointDsl(config, ruleChain, item)
 		}
 		ruleChainEndpoint.bindTo(item, ruleEngineId)
-		if err := ruleChainEndpoint.AddEndpointAndStart(item, endpoint.DynamicEndpointOptions.WithConfig(config),
-			endpoint.DynamicEndpointOptions.WithRouterOpts(endpoint.RouterOptions.WithRuleGo(ruleGoPool)),
-			endpoint.DynamicEndpointOptions.WithRuleChain(ruleChain)); err != nil {
+		if err := ruleChainEndpoint.createEndpoint(item); err != nil {
 			return nil, err
 		}
 	}
+	for _, ep := range ruleChainEndpoint.GetEndpoints() {
+		eps = append(eps, ep)
+	}
+	// 挂路由前把底层实例注册进链目录（与 OnCreated 的 syncResources 同源、幂等）。
+	if chainCtx != nil {
+		ruleChainEndpoint.registerResources(nil, eps)
+	}
+	if err := ruleChainEndpoint.subscribeAndStart(eps); err != nil {
+		return nil, err
+	}
 	return ruleChainEndpoint, nil
+}
+
+// createEndpoint creates the endpoint instance without attaching routers or
+// starting it, so the caller can register every instance into the chain
+// resource directory first. Routers are deferred and applied later via
+// subscribeAndStart.
+func (e *RuleChainEndpoint) createEndpoint(item *types.EndpointDsl) error {
+	return e.AddEndpointAndStart(item, false,
+		endpoint.DynamicEndpointOptions.WithConfig(e.config),
+		endpoint.DynamicEndpointOptions.WithRouterOpts(endpoint.RouterOptions.WithRuleGo(e.ruleGoPool)),
+		endpoint.DynamicEndpointOptions.WithRuleChain(e.chainDef()),
+		endpoint.DynamicEndpointOptions.WithChainCtx(e.chainCtx),
+		endpoint.DynamicEndpointOptions.WithDeferredRouters(true))
+}
+
+func (e *RuleChainEndpoint) chainDef() *types.RuleChain {
+	if e.chainCtx != nil {
+		return e.chainCtx.Definition()
+	}
+	return nil
+}
+
+// subscribeAndStart attaches the deferred routers of the given endpoints and
+// starts them. Called only for freshly created endpoints; untouched endpoints
+// keep their existing routers and running state.
+func (e *RuleChainEndpoint) subscribeAndStart(eps []endpoint.DynamicEndpoint) error {
+	for _, ep := range eps {
+		if err := ep.ApplyRouters(); err != nil {
+			return err
+		}
+	}
+	for _, ep := range eps {
+		if err := ep.Start(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Start 启动服务
@@ -291,29 +345,58 @@ func (e *RuleChainEndpoint) Reload(ruleChain *types.RuleChain, newDefs []*types.
 	for _, item := range removed {
 		e.RemoveEndpoint(item.Id)
 	}
+	// 两阶段：added/modified 先创建实例（延迟路由），注册进链目录后再只对它们挂路由+启动；
+	// 未改动的存量 endpoint 保持原有路由与运行状态，不重复订阅。
+	changed := make([]endpoint.DynamicEndpoint, 0, len(added)+len(modified))
 	for _, item := range added {
 		e.bindTo(item, e.ruleEngineId)
-		if err := e.AddEndpointAndStart(item, endpoint.DynamicEndpointOptions.WithConfig(e.config),
-			endpoint.DynamicEndpointOptions.WithRouterOpts(endpoint.RouterOptions.WithRuleGo(e.ruleGoPool)),
-			endpoint.DynamicEndpointOptions.WithRuleChain(ruleChain),
-		); err != nil {
+		if err := e.createEndpoint(item); err != nil {
 			return err
 		}
 	}
 	for _, item := range modified {
 		e.bindTo(item, e.ruleEngineId)
 		e.RemoveEndpoint(item.Id)
-		if err := e.AddEndpointAndStart(item, endpoint.DynamicEndpointOptions.WithConfig(e.config),
-			endpoint.DynamicEndpointOptions.WithRouterOpts(endpoint.RouterOptions.WithRuleGo(e.ruleGoPool)),
-			endpoint.DynamicEndpointOptions.WithRuleChain(ruleChain),
-		); err != nil {
+		if err := e.createEndpoint(item); err != nil {
 			return err
 		}
 	}
-	return nil
+	for _, item := range append(append([]*types.EndpointDsl{}, added...), modified...) {
+		if ep, ok := e.GetEndpoint(item.Id); ok {
+			changed = append(changed, ep)
+		}
+	}
+	if e.chainCtx != nil {
+		e.registerResources(nil, changed)
+	}
+	return e.subscribeAndStart(changed)
 }
 
-func (e *RuleChainEndpoint) AddEndpointAndStart(def *types.EndpointDsl, opts ...endpoint.DynamicEndpointOption) error {
+// registerResources syncs the chain resource directory; same semantics as
+// EndpointAspect.syncResources (store new first, then prune removed).
+func (e *RuleChainEndpoint) registerResources(oldEps, newEps []endpoint.DynamicEndpoint) {
+	if e.chainCtx == nil {
+		return
+	}
+	reg := e.chainCtx.ResourceRegistry()
+	newIds := make(map[string]bool, len(newEps))
+	for _, ep := range newEps {
+		if ep == nil {
+			continue
+		}
+		if inner := ep.Target(); inner != nil {
+			reg.Register(ep.Id(), inner)
+			newIds[ep.Id()] = true
+		}
+	}
+	for _, ep := range oldEps {
+		if ep != nil && !newIds[ep.Id()] {
+			reg.Unregister(ep.Id())
+		}
+	}
+}
+
+func (e *RuleChainEndpoint) AddEndpointAndStart(def *types.EndpointDsl, startNow bool, opts ...endpoint.DynamicEndpointOption) error {
 	ep, err := e.endpointPool.Factory().NewFromDef(*def, opts...)
 	if err != nil {
 		return err
@@ -325,6 +408,9 @@ func (e *RuleChainEndpoint) AddEndpointAndStart(def *types.EndpointDsl, opts ...
 		def.Id = id
 	}
 	e.AddEndpoint(ep)
+	if !startNow {
+		return nil
+	}
 	return ep.Start()
 }
 

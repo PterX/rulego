@@ -112,6 +112,16 @@ type DynamicEndpoint struct {
 	// definition 包含端点 DSL 配置
 	definition types.EndpointDsl
 
+	// chainCtx is the owning rule chain context, injected into the inner
+	// endpoint configuration so its SharedNode can resolve chain-scoped ref://
+	// references. Nil for endpoints created outside a chain.
+	chainCtx types.ChainCtx
+
+	// deferredRouters defers router definitions until ApplyRouters, so chain
+	// deployment can register all endpoint instances into the chain resource
+	// directory before any of them subscribes.
+	deferredRouters bool
+
 	// ruleConfig contains the rule engine configuration
 	// ruleConfig 包含规则引擎配置
 	ruleConfig types.Config
@@ -232,6 +242,40 @@ func (e *DynamicEndpoint) SetRestart(restart bool) {
 // SetInterceptors 设置 DynamicEndpoint 的拦截器。
 func (e *DynamicEndpoint) SetInterceptors(interceptors ...endpoint.Process) {
 	e.interceptors = interceptors
+}
+
+// SetChainCtx sets the owning rule chain context; injected into the inner
+// endpoint configuration on (re)creation so its SharedNode can resolve
+// chain-scoped ref:// references.
+// SetChainCtx 设置所属规则链上下文，(重)建内层端点时注入其配置，
+// 使 SharedNode 能解析链内 ref:// 引用。
+func (e *DynamicEndpoint) SetChainCtx(chainCtx types.ChainCtx) {
+	e.chainCtx = chainCtx
+}
+
+// SetDeferredRouters defers applying router definitions until ApplyRouters is
+// called. Chain deployment uses this to register all endpoint instances into
+// the chain resource directory before any of them subscribes.
+// SetDeferredRouters 将路由定义的应用推迟到 ApplyRouters。链部署用它把全部
+// 端点实例先注册进链资源目录、再统一订阅。
+func (e *DynamicEndpoint) SetDeferredRouters(deferred bool) {
+	e.deferredRouters = deferred
+}
+
+// ApplyRouters applies the deferred router definitions; a no-op unless
+// SetDeferredRouters(true) was set on (re)creation.
+// ApplyRouters 应用被延迟的路由定义；未开启延迟时为 no-op。
+func (e *DynamicEndpoint) ApplyRouters() error {
+	if e.Endpoint == nil {
+		return errors.New("endpoint not initialized")
+	}
+	// AddRouterFromDef 自带 e.locker；RWMutex 不可重入，这里不能再包锁
+	for _, item := range e.definition.Routers {
+		if _, err := e.AddRouterFromDef(item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AddInterceptors adds interceptors to the DynamicEndpoint.
@@ -571,6 +615,10 @@ func (e *DynamicEndpoint) newEndpoint(dsl types.EndpointDsl) error {
 	if dsl.Id != "" {
 		configuration[types.NodeConfigurationKeySelfDefinition] = dsl.RuleNode
 	}
+	//注入所属链上下文：端点 SharedNode 借此解析链内 ref://（借用同链节点/端点的连接）
+	if e.chainCtx != nil {
+		configuration[types.NodeConfigurationKeyChainCtx] = e.chainCtx
+	}
 	if ep, err := Registry.New(dsl.Type, e.ruleConfig, configuration); err != nil {
 		return err
 	} else {
@@ -583,9 +631,14 @@ func (e *DynamicEndpoint) newEndpoint(dsl types.EndpointDsl) error {
 			e.id = ep.Id()
 		}
 		e.AddInterceptors(e.interceptors...)
-		for _, item := range dsl.Routers {
-			if _, err := e.AddRouterFromDef(item); err != nil {
-				return err
+		// deferred: chain deployment registers all endpoint instances into the
+		// chain resource directory first, then subscribes them together, so
+		// same-chain endpoints can borrow each other via ref://
+		if !e.deferredRouters {
+			for _, item := range dsl.Routers {
+				if _, err := e.AddRouterFromDef(item); err != nil {
+					return err
+				}
 			}
 		}
 		// Add interceptors

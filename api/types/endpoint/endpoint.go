@@ -333,11 +333,30 @@ type DynamicEndpoint interface {
 	// This replaces any existing interceptors with the provided ones.
 	//
 	// SetInterceptors 设置动态端点的全局拦截器。
-	// 这将用提供的拦截器替换任何现有的拦截器。
+	// 这将用提供的拦截器替换任何现有拦截器。
 	//
 	// Parameters / 参数：
 	// • interceptors: Processing functions to set as global interceptors  要设置为全局拦截器的处理函数
 	SetInterceptors(interceptors ...Process)
+
+	// SetChainCtx sets the owning rule chain context, injected into the endpoint
+	// configuration so the endpoint's SharedNode can resolve chain-scoped ref://
+	// references (borrowing connections from same-chain nodes).
+	//
+	// SetChainCtx 设置所属规则链上下文，注入到端点配置中，
+	// 使端点的 SharedNode 能解析链内 ref:// 引用（借用同链节点的连接）。
+	SetChainCtx(chainCtx types.ChainCtx)
+
+	// SetDeferredRouters controls whether router definitions are applied on
+	// creation. When true, the endpoint instance is created without subscribing;
+	// ApplyRouters must be called separately. Used by chain deployment to
+	// register all endpoint instances into the chain resource directory before
+	// any of them subscribes, so same-chain endpoints can borrow each other.
+	//
+	// SetDeferredRouters 控制创建时是否立即应用路由定义。为 true 时端点实例
+	// 创建但不订阅，需另行调用 ApplyRouters。链部署用它把全部端点实例先注册
+	// 进链资源目录、再统一订阅，使同链端点可互相借用。
+	SetDeferredRouters(deferred bool)
 
 	// Reload reloads the dynamic endpoint with a new DSL configuration.
 	// The behavior depends on the restart setting and configuration changes.
@@ -415,6 +434,13 @@ type DynamicEndpoint interface {
 	// Returns / 返回：
 	// • Endpoint: The underlying endpoint implementation  底层端点实现
 	Target() Endpoint
+
+	// ApplyRouters applies the deferred router definitions (see SetDeferredRouters).
+	// Returns an error when any router fails to attach.
+	//
+	// ApplyRouters 应用被延迟的路由定义（见 SetDeferredRouters）。
+	// 任一路由挂载失败时返回错误。
+	ApplyRouters() error
 
 	// SetRuleChain stores the original rule chain DSL definition when the endpoint
 	// is initialized from a rule chain configuration.

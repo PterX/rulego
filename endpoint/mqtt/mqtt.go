@@ -664,6 +664,10 @@ func (x *Mqtt) Init(ruleConfig types.Config, configuration types.Configuration) 
 		}
 		return nil
 	})
+	// chainCtx is injected when deployed on a chain: enables chain-scoped ref://
+	// resolution (borrowing from same-chain nodes or endpoints) and registers
+	// this endpoint's client for same-chain borrowers
+	x.SharedNode.BindChain(configuration)
 	return err
 }
 

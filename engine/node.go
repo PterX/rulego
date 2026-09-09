@@ -365,6 +365,34 @@ func (rn *RuleNodeCtx) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	}
 }
 
+// GetInstance triggers the underlying node's lazy connection init when it
+// implements types.SharedNode; a connection-holding node then registers its
+// connection into the chain resource directory. This completes
+// types.SharedNodeCtx so a chain-scoped ref:// borrower can drive a not-yet-
+// connected target node at resolve time.
+func (rn *RuleNodeCtx) GetInstance() (interface{}, error) {
+	rn.RLock()
+	node := rn.Node
+	rn.RUnlock()
+
+	if node == nil {
+		return nil, errors.New("node is nil")
+	}
+	sn, ok := node.(types.SharedNode)
+	if !ok {
+		return nil, fmt.Errorf("node %s does not implement SharedNode", rn.SelfDefinition.Id)
+	}
+	return sn.GetInstance()
+}
+
+// GetNode returns the underlying node implementation, completing
+// types.SharedNodeCtx. The read lock guards against the reload write lock.
+func (rn *RuleNodeCtx) GetNode() interface{} {
+	rn.RLock()
+	defer rn.RUnlock()
+	return rn.Node
+}
+
 // Copy copies the contents of a new RuleNodeCtx into this one.
 // This method is used for updating node configuration during reloads.
 //

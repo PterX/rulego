@@ -478,6 +478,24 @@ func (x *SharedNode[T]) getSafely(visited map[string]struct{}) (T, error) {
 			if inst, found := x.chainCtx.Resources().Lookup(x.InstanceId); found {
 				return x.unpackHolder(inst, visited)
 			}
+			// ①' 链内 miss：目标可能是同链 lazy 组件（未建连、尚未注册进目录）。
+			// 经链上下文定位目标节点并触发其建连——连接型组件建连成功会注册进链目录，
+			// 随后重查命中。借用型目标（自身也是 ref://）不触发：连接归其上游所有，
+			// 递归追借会沿未解析引用链发散。
+			if target, ok := x.chainCtx.GetNodeById(types.RuleNodeId{Id: x.InstanceId}); ok {
+				if g, ok := target.(types.SharedNodeCtx); ok {
+					if node := g.GetNode(); node != nil {
+						if b, isBorrower := node.(interface{ IsBorrower() bool }); !isBorrower || !b.IsBorrower() {
+							if _, err := g.GetInstance(); err != nil {
+								return zeroValue[T](), fmt.Errorf("chain node %s init: %w", x.InstanceId, err)
+							}
+						}
+					}
+				}
+				if inst, found := x.chainCtx.Resources().Lookup(x.InstanceId); found {
+					return x.unpackHolder(inst, visited)
+				}
+			}
 		}
 		// ② NodePool 回退（comma-ok，类型不符报错而非 panic）
 		if x.RuleConfig.NodePool == nil {
@@ -617,6 +635,21 @@ func (x *SharedNode[T]) Close() error {
 // IsFromPool 是否从资源池获取
 func (x *SharedNode[T]) IsFromPool() bool {
 	return x.isFromPool
+}
+
+// RefTarget returns the id this node borrows from when configured as
+// ref://<id>, or "" in local mode. NodePool uses it to reject cyclic refs at
+// registration; IsBorrower uses it to distinguish owners from borrowers.
+func (x *SharedNode[T]) RefTarget() string {
+	return x.InstanceId
+}
+
+// IsBorrower reports whether this node borrows a connection via ref:// instead
+// of owning one. Chain-scoped resolution never triggers lazy init on a borrower
+// target: the connection belongs to the target's upstream source, and chasing
+// it recursively could chain-borrow through unresolved refs.
+func (x *SharedNode[T]) IsBorrower() bool {
+	return x.InstanceId != ""
 }
 
 func (x *SharedNode[T]) Initialized() bool {

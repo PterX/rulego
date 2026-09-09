@@ -571,6 +571,36 @@ func (d dynamicEndpointOptions) WithRestart(restart bool) DynamicEndpointOption 
 	}
 }
 
+// WithChainCtx creates a DynamicEndpointOption that binds the endpoint to its
+// owning rule chain context. The context is injected into the endpoint
+// configuration, enabling the endpoint's SharedNode to resolve chain-scoped
+// ref:// references (borrowing connections from same-chain nodes or endpoints).
+//
+// WithChainCtx 创建一个 DynamicEndpointOption，将端点绑定到其所属的规则链上下文。
+// 该上下文会注入端点配置，使端点的 SharedNode 能解析链内 ref:// 引用
+// （借用同链节点或端点的连接）。
+func (d dynamicEndpointOptions) WithChainCtx(chainCtx types.ChainCtx) DynamicEndpointOption {
+	return func(re DynamicEndpoint) error {
+		re.SetChainCtx(chainCtx)
+		return nil
+	}
+}
+
+// WithDeferredRouters creates a DynamicEndpointOption that defers applying
+// router definitions until ApplyRouters is called. Used by chain deployment
+// to register all endpoint instances into the chain resource directory before
+// any of them subscribes, so same-chain endpoints can borrow each other.
+//
+// WithDeferredRouters 创建一个 DynamicEndpointOption，把路由定义的应用推迟到
+// ApplyRouters 调用。链部署用它把全部端点实例先注册进链资源目录、再统一订阅，
+// 使同链端点可互相借用。
+func (d dynamicEndpointOptions) WithDeferredRouters(deferred bool) DynamicEndpointOption {
+	return func(re DynamicEndpoint) error {
+		re.SetDeferredRouters(deferred)
+		return nil
+	}
+}
+
 // WithInterceptors creates a DynamicEndpointOption that sets global interceptors for the dynamic endpoint.
 // These interceptors are applied to all incoming messages, providing cross-cutting functionality
 // such as authentication, logging, and message transformation.
