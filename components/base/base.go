@@ -359,18 +359,56 @@ func (x *SharedNode[T]) registerUnderLock(client T) {
 	x.isRegistered = true
 }
 
-// unpackHolder 将同链目录命中的实例解包为连接（断言 connHolder + load）。
-// 类型不符或连接为 nil 返回错误（不静默回退，暴露跨类型 ref / id 碰撞等配置错误）。
-func (x *SharedNode[T]) unpackHolder(inst any) (T, error) {
-	h, ok := inst.(*connHolder[T])
-	if !ok {
+// refResolver is satisfied by any node embedding SharedNode (the method is
+// promoted), letting the chain-scoped ref:// fallback carry cycle detection
+// across resolution hops. Foreign types.SharedNode implementations fall back
+// to plain GetInstance without cycle tracking.
+type refResolver interface {
+	resolveRefChain(visited map[string]struct{}) (any, error)
+}
+
+// unpackHolder 将同链目录命中的实例解包为连接。
+// *connHolder[T] 直接 load；其他实现 types.SharedNode 的实例（EndpointAspect 把
+// endpoint 注册进同链目录）经 GetInstance() 取底层连接再断言 T。类型不符或连接为
+// nil 返回错误（不静默回退，暴露跨类型 ref / id 碰撞等配置错误）。
+// visited 为当前 ref:// 解析链上已进入的 InstanceId 集合（防环），公共入口为 nil。
+func (x *SharedNode[T]) unpackHolder(inst any, visited map[string]struct{}) (T, error) {
+	if h, ok := inst.(*connHolder[T]); ok {
+		c := h.load()
+		if isZeroValue(c) {
+			return zeroValue[T](), fmt.Errorf("chain resource %s connection is nil", x.InstanceId)
+		}
+		return c, nil
+	}
+	var raw any
+	if rr, ok := inst.(refResolver); ok {
+		v := visited
+		if v == nil {
+			v = make(map[string]struct{})
+		}
+		v[x.InstanceId] = struct{}{}
+		r, err := rr.resolveRefChain(v)
+		if err != nil {
+			return zeroValue[T](), err
+		}
+		raw = r
+	} else if sn, ok := inst.(types.SharedNode); ok {
+		r, err := sn.GetInstance()
+		if err != nil {
+			return zeroValue[T](), err
+		}
+		raw = r
+	} else {
 		return zeroValue[T](), fmt.Errorf("chain resource %s type %T is incompatible", x.InstanceId, inst)
 	}
-	c := h.load()
-	if isZeroValue(c) {
+	t, ok := raw.(T)
+	if !ok {
+		return zeroValue[T](), fmt.Errorf("chain resource %s resolved to %T, incompatible with %s", x.InstanceId, raw, x.NodeType)
+	}
+	if isZeroValue(t) {
 		return zeroValue[T](), fmt.Errorf("chain resource %s connection is nil", x.InstanceId)
 	}
-	return c, nil
+	return t, nil
 }
 
 // GetInstance 获取共享实例
@@ -408,12 +446,37 @@ func (x *SharedNode[T]) GetInstance() (interface{}, error) {
 // 2. 获取实例时使用 GetSafely() 方法
 // 3. 组件销毁时调用 Close() 方法清理资源
 func (x *SharedNode[T]) GetSafely() (T, error) {
+	return x.getSafely(nil)
+}
+
+// resolveRefChain implements refResolver: resolves this node's ref:// target
+// (or local client) while propagating the visited set for cycle detection.
+// Called by another SharedNode's unpackHolder fallback when the chain directory
+// holds a SharedNode-embedding instance such as an endpoint.
+func (x *SharedNode[T]) resolveRefChain(visited map[string]struct{}) (any, error) {
+	v, err := x.getSafely(visited)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// getSafely implements GetSafely. visited carries the InstanceIds entered on the
+// current ref:// resolution chain; re-entering an already-visited InstanceId means
+// a circular reference. nil marks the public entry (no ids visited yet).
+func (x *SharedNode[T]) getSafely(visited map[string]struct{}) (T, error) {
 	if x.InstanceId != "" {
 		// ref:// 借用模式
+		if visited != nil {
+			if _, dup := visited[x.InstanceId]; dup {
+				return zeroValue[T](), fmt.Errorf("circular ref:// reference: %s", x.InstanceId)
+			}
+			visited[x.InstanceId] = struct{}{}
+		}
 		// ① 同链目录优先（部署链 chainCtx，固定不随消息流漂移）
 		if x.chainCtx != nil {
 			if inst, found := x.chainCtx.Resources().Lookup(x.InstanceId); found {
-				return x.unpackHolder(inst)
+				return x.unpackHolder(inst, visited)
 			}
 		}
 		// ② NodePool 回退（comma-ok，类型不符报错而非 panic）
