@@ -204,6 +204,11 @@ type NodePool struct {
 	// 键：resourceId (string) - 共享资源的唯一标识符
 	// 值：*sharedNodeCtx - 包含共享节点及其元数据的包装器
 	entries sync.Map
+	// aliases maps alias names to the same *sharedNodeCtx values stored in entries.
+	// Purely an extra lookup layer: Get falls back here after entries miss, while
+	// iteration methods walk entries only, so an aliased node never shows up twice.
+	// Aliases are runtime state, not part of DSL or persistence.
+	aliases sync.Map
 }
 
 // NewNodePool creates a new node pool instance with the specified configuration.
@@ -301,6 +306,9 @@ func (n *NodePool) NewFromEndpoint(def types.EndpointDsl) (types.SharedNodeCtx, 
 	if _, ok := n.entries.Load(def.Id); ok {
 		return nil, fmt.Errorf("duplicate node id:%s", def.Id)
 	}
+	if _, ok := n.aliases.Load(def.Id); ok {
+		return nil, fmt.Errorf("duplicate node id:%s", def.Id)
+	}
 
 	if ctx, err := endpoint.NewFromDef(types.EndpointDsl{RuleNode: def.RuleNode}, endpointApi.DynamicEndpointOptions.WithRestart(true)); err == nil {
 		if _, ok := ctx.Target().(types.SharedNode); !ok {
@@ -318,6 +326,9 @@ func (n *NodePool) NewFromEndpoint(def types.EndpointDsl) (types.SharedNodeCtx, 
 
 func (n *NodePool) NewFromRuleNode(def types.RuleNode) (types.SharedNodeCtx, error) {
 	if _, ok := n.entries.Load(def.Id); ok {
+		return nil, fmt.Errorf("duplicate node id:%s", def.Id)
+	}
+	if _, ok := n.aliases.Load(def.Id); ok {
 		return nil, fmt.Errorf("duplicate node id:%s", def.Id)
 	}
 	if ctx, err := engine.InitNetResourceNodeCtx(n.Config, nil, nil, &def); err == nil {
@@ -351,6 +362,9 @@ func (n *NodePool) addEndpointNode(endpointNode endpointApi.Endpoint) (types.Sha
 	if _, ok := n.entries.Load(id); ok {
 		return nil, fmt.Errorf("duplicate node id:%s", id)
 	}
+	if _, ok := n.aliases.Load(id); ok {
+		return nil, fmt.Errorf("duplicate node id:%s", id)
+	}
 	if _, ok := endpointNode.(types.SharedNode); !ok {
 		return nil, ErrNotImplemented
 	} else {
@@ -365,6 +379,9 @@ func (n *NodePool) addNode(nodeCtx *engine.RuleNodeCtx) (types.SharedNodeCtx, er
 	if _, ok := n.entries.Load(id); ok {
 		return nil, fmt.Errorf("duplicate node id:%s", id)
 	}
+	if _, ok := n.aliases.Load(id); ok {
+		return nil, fmt.Errorf("duplicate node id:%s", id)
+	}
 	if _, ok := nodeCtx.Node.(types.SharedNode); !ok {
 		return nil, ErrNotImplemented
 	} else {
@@ -374,13 +391,75 @@ func (n *NodePool) addNode(nodeCtx *engine.RuleNodeCtx) (types.SharedNodeCtx, er
 	}
 }
 
-// Get retrieves a SharedNode by its ID.
+// AddNodeWithAlias adds a shared node and binds an extra lookup alias to it.
+// The pool key remains the node's own Id (e.g. the server address for
+// endpoint components); the alias is resolved by Get/GetInstance/Lookup only
+// when the primary key misses, so ref://alias and ref://<primaryId> reach
+// the same instance.
+// If the alias is empty or taken, the node stays registered under its
+// primary key and the error is returned; rebind later via AddAlias.
+func (n *NodePool) AddNodeWithAlias(alias string, node types.Node) (types.SharedNodeCtx, error) {
+	if alias == "" {
+		return nil, fmt.Errorf("alias is empty")
+	}
+	ctx, err := n.AddNode(node)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.bindAlias(ctx, alias); err != nil {
+		return ctx, err
+	}
+	return ctx, nil
+}
+
+// AddAlias binds extra lookup aliases to a registered shared node, located
+// by its primary id or one of its existing aliases.
+// An alias equal to the node's primary id is a no-op; on conflict the
+// remaining aliases are skipped and the error is returned.
+func (n *NodePool) AddAlias(id string, aliases ...string) error {
+	ctx, ok := n.Get(id)
+	if !ok {
+		return fmt.Errorf("node resource not found id=%s", id)
+	}
+	for _, alias := range aliases {
+		if err := n.bindAlias(ctx, alias); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bindAlias registers one alias unless it is empty or shadows an existing
+// primary key or another node's alias. Binding the same alias to the same
+// node again is a no-op.
+func (n *NodePool) bindAlias(ctx types.SharedNodeCtx, alias string) error {
+	if alias == "" {
+		return fmt.Errorf("alias is empty")
+	}
+	if alias == ctx.GetNodeId().Id {
+		return nil
+	}
+	if _, ok := n.entries.Load(alias); ok {
+		return fmt.Errorf("alias conflicts with node id:%s", alias)
+	}
+	if prev, loaded := n.aliases.LoadOrStore(alias, ctx); loaded {
+		if prev.(*sharedNodeCtx) != ctx {
+			return fmt.Errorf("alias already bound to another node:%s", alias)
+		}
+	}
+	return nil
+}
+
+// Get retrieves a SharedNode by its ID. Aliases bound through
+// AddAlias/AddNodeWithAlias resolve to the same context.
 func (n *NodePool) Get(id string) (types.SharedNodeCtx, bool) {
 	if v, ok := n.entries.Load(id); ok {
 		return v.(*sharedNodeCtx), ok
-	} else {
-		return nil, false
 	}
+	if v, ok := n.aliases.Load(id); ok {
+		return v.(*sharedNodeCtx), ok
+	}
+	return nil, false
 }
 
 // GetInstance retrieves a net client or server connection by its ID.
@@ -402,12 +481,26 @@ func (n *NodePool) Lookup(id string) (any, bool) {
 	return v, true
 }
 
-// Del deletes a SharedNode instance by its ID.
+// Del deletes a SharedNode instance by its primary id or any of its aliases.
 func (n *NodePool) Del(id string) {
+	var ctx *sharedNodeCtx
 	if v, ok := n.entries.Load(id); ok {
-		v.(*sharedNodeCtx).Destroy()
-		n.entries.Delete(id)
+		ctx = v.(*sharedNodeCtx)
+	} else if v, ok := n.aliases.Load(id); ok {
+		ctx = v.(*sharedNodeCtx)
 	}
+	if ctx == nil {
+		return
+	}
+	ctx.Destroy()
+	n.entries.Delete(ctx.GetNodeId().Id)
+	// remove only aliases still pointing at this node
+	n.aliases.Range(func(key, value any) bool {
+		if value.(*sharedNodeCtx) == ctx {
+			n.aliases.Delete(key)
+		}
+		return true
+	})
 }
 
 // Stop stops and releases all SharedNode instances.
