@@ -676,10 +676,10 @@ github.com/rogpeppe/go-internal v1.6.1/go.mod h1:xXDCJY+GAPziupqXw64V24skbSoqbTE
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/rollbar/rollbar-go v1.0.2/go.mod h1:AcFs5f0I+c71bpHlXNNDbOWJiKwjFDtISeXco0L5PKQ=
-github.com/rulego/rulego v0.37.3-0.20260907064819-972e69b12d64 h1:gAa5OLfii+TeOWqFSQ1XCWhxIA546CqcYbaXKEB87D4=
-github.com/rulego/rulego v0.37.3-0.20260907064819-972e69b12d64/go.mod h1:C+5ohZtTIBNB4l1UY3aVLX+OKAXOHbryRn0I3+no8cs=
-github.com/rulego/rulego-components v0.37.1-0.20260907065740-1a8a0425d30f h1:wZmiOcVi7POHQfFISUf6efWcP3TAOdSoJMxAk36kE30=
-github.com/rulego/rulego-components v0.37.1-0.20260907065740-1a8a0425d30f/go.mod h1:+2jhDhVK3Yycq8PXnuL9Hy9/UoqqXyMKPjBDfownuUk=
+github.com/rulego/rulego v0.38.0 h1:bUJpVSoALBb/vDRrtKPoKpXfL4puCei+DM1EqSQ1YOw=
+github.com/rulego/rulego v0.38.0/go.mod h1:C+5ohZtTIBNB4l1UY3aVLX+OKAXOHbryRn0I3+no8cs=
+github.com/rulego/rulego-components v0.37.1-0.20260909073244-db603f94a756 h1:snenOX+cBY9LSUhZeyn8kzDPuVQvaee4SDdYiPS8Jnk=
+github.com/rulego/rulego-components v0.37.1-0.20260909073244-db603f94a756/go.mod h1:zfmL+X5jZQglFUCSAaf+sb5U4aAUPtGGPy52NQCuWUE=
 github.com/rulego/rulego-components-ai v0.37.1-0.20260816034014-d5312a602f16 h1:8FyisqQNR6J17CTUxWTVX6ONzG09/V9kCknF52Eij98=
 github.com/rulego/rulego-components-ai v0.37.1-0.20260816034014-d5312a602f16/go.mod h1:xdl9QbrKEDO33BQGkHuKDEL0pB1db6vAHfNTr4zuIh0=
 github.com/rulego/rulego-components-ci v0.36.0 h1:jNBrm/fRKIRSVM26pCszH+qxjJ+yRRXcwmJnfxhTzcw=
